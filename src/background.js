@@ -130,19 +130,69 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   }));
 
   try {
+    let initialText = '';
+    let sourceFrameId = null;
+    const isGoogleDocs = /^https:\/\/docs\.google\.com\/document\//.test(targetTab.url ?? '');
+
+    // Google ドキュメントの編集面はトップページではなく内部フレームにある。
+    // 選択中のフレーム自身でコピーを実行し、パレット表示前に文字列を回収する。
+    if (isGoogleDocs) {
+      const captures = await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id, allFrames: true },
+        func: captureSelectionInFrame,
+      });
+      const textCapture = captures.find(({ result }) => (result?.text ?? '').trim());
+      const focusedEditor = captures.find(({ frameId, result }) => frameId !== 0 && result?.focused);
+      initialText = textCapture?.result?.text ?? '';
+      // 文字列はトップフレームの copy から得られる場合があるが、フォーカスを
+      // 戻す先は実際に選択操作を受けていた内部編集フレームを優先する。
+      sourceFrameId = focusedEditor?.frameId ?? textCapture?.frameId ?? null;
+    }
+
     await chrome.scripting.executeScript({
       target: { tabId: targetTab.id },
       func: showPaletteInPage,
-      args: [{ items }],
+      args: [{ items, initialText, clipboardOnly: isGoogleDocs, sourceFrameId }],
     });
   } catch (e) {
     console.warn('totonoe: ショートカットメニューを表示できませんでした', e);
   }
 });
 
+// この関数は各フレームへ文字列化して注入されるので、外の変数を参照しないこと。
+async function captureSelectionInFrame() {
+  const el = document.activeElement;
+  const focused = document.hasFocus();
+  const editableInput =
+    el && el.tagName === 'INPUT' && /^(text|search|url|tel|email|)$/i.test(el.getAttribute('type') ?? '');
+
+  if (el && (el.tagName === 'TEXTAREA' || editableInput) && el.selectionStart != null) {
+    const text = el.value.slice(el.selectionStart, el.selectionEnd);
+    if (text.trim()) return { text, focused };
+  }
+
+  const selection = window.getSelection();
+  const selectedText = selection?.toString() ?? '';
+  if (selectedText.trim()) return { text: selectedText, focused };
+
+  // Docs のキャンバスエディタは DOM selection を公開しない。フォーカスを持つ
+  // 内部フレームで Docs 自身のコピー処理を呼び、クリップボードから読み取る。
+  if (!focused) return { text: '', focused: false };
+  try {
+    if (!document.execCommand('copy')) return { text: '', focused };
+    return { text: await navigator.clipboard.readText(), focused };
+  } catch {
+    return { text: '', focused };
+  }
+}
+
 /* ---------------- メッセージ処理（パレットからの変換要求） ---------------- */
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'TOTONOE_OPEN_OPTIONS') {
+    chrome.runtime.openOptionsPage();
+    return;
+  }
   if (message?.type === 'SELECTION_CHANGED') {
     updateMenuTitles(message.selectionText);
     return;
@@ -165,6 +215,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true; // 非同期レスポンス
   }
+  if (message?.type === 'TOTONOE_FOCUS_GOOGLE_DOCS') {
+    (async () => {
+      if (!sender.tab?.id) {
+        sendResponse({ focused: false });
+        return;
+      }
+      try {
+        const [{ result = false } = {}] = await chrome.scripting.executeScript({
+          target: { tabId: sender.tab.id, frameIds: [0] },
+          func: focusGoogleDocsEditor,
+        });
+        sendResponse({ focused: result });
+      } catch {
+        sendResponse({ focused: false });
+      }
+    })();
+    return true;
+  }
   if (message?.type === 'TOTONOE_PREVIEW_SELECTION') {
     (async () => {
       const { formats, rules } = await loadSettings();
@@ -177,6 +245,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // 非同期レスポンス
   }
 });
+
+// Docs のトップページから、実際のキー入力を受け取る内部 iframe へ
+// フォーカスを戻す。選択範囲は Docs 自身が保持しているため再選択は不要。
+function focusGoogleDocsEditor() {
+  try {
+    const iframe = document.querySelector('iframe.docs-texteventtarget-iframe');
+    if (!(iframe instanceof HTMLIFrameElement)) return false;
+    iframe.focus({ preventScroll: true });
+    iframe.contentWindow?.focus();
+    const editor = iframe.contentDocument?.querySelector('[contenteditable="true"]')
+      ?? iframe.contentDocument?.body;
+    if (editor instanceof HTMLElement) editor.focus({ preventScroll: true });
+    return document.activeElement === iframe;
+  } catch {
+    return false;
+  }
+}
 
 /* ---------------- ページ側で走る処理 ---------------- */
 /* この関数は文字列化して注入されるので、外の変数を参照しないこと。 */
@@ -251,7 +336,7 @@ function applyToPage({ text, summary, error }) {
 
 /* ---------------- ページ側でパレットを表示する処理 ---------------- */
 
-function showPaletteInPage({ items }) {
+async function showPaletteInPage({ items, initialText = '', clipboardOnly = false, sourceFrameId = null }) {
   const HOST_ID = 'totonoe-palette-host';
   const existing = document.getElementById(HOST_ID);
   if (existing) {
@@ -285,15 +370,17 @@ function showPaletteInPage({ items }) {
     /^(text|search|url|tel|email|)$/i.test(el.getAttribute('type') ?? '');
   const isInputOrTextarea = el && (el.tagName === 'TEXTAREA' || editableInput) && el.selectionStart != null;
 
-  let selectedText = '';
-  let targetInfo = null;
+  let selectedText = initialText;
+  let targetInfo = clipboardOnly && initialText.trim()
+    ? { type: 'google-docs', frameId: sourceFrameId }
+    : null;
 
-  if (isInputOrTextarea && el.selectionStart !== el.selectionEnd) {
+  if (!selectedText && isInputOrTextarea && el.selectionStart !== el.selectionEnd) {
     const start = el.selectionStart;
     const end = el.selectionEnd;
     selectedText = el.value.slice(start, end);
     targetInfo = { type: 'input', el, start, end };
-  } else {
+  } else if (!selectedText) {
     const sel = window.getSelection();
     if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
       selectedText = sel.toString();
@@ -310,9 +397,86 @@ function showPaletteInPage({ items }) {
     return;
   }
 
-  const applyResult = ({ text, summary, error }) => {
+  // パレットの挿入前に、選択範囲のビューポート座標を保存する。
+  // input / textarea は Range を取得できないため、同じスタイルの
+  // 不可視要素で選択末尾までの文字レイアウトを再現する。
+  const getInputSelectionRect = (inputEl, selectionEnd) => {
+    const rect = inputEl.getBoundingClientRect();
+    const computed = getComputedStyle(inputEl);
+    const mirror = document.createElement('div');
+    const properties = [
+      'boxSizing', 'width', 'height', 'paddingTop', 'paddingRight', 'paddingBottom',
+      'paddingLeft', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth',
+      'borderLeftWidth', 'fontFamily', 'fontSize', 'fontStyle', 'fontWeight',
+      'fontVariant', 'letterSpacing', 'lineHeight', 'textAlign', 'textIndent',
+      'textTransform', 'wordSpacing', 'tabSize',
+    ];
+
+    mirror.style.position = 'fixed';
+    mirror.style.visibility = 'hidden';
+    mirror.style.pointerEvents = 'none';
+    mirror.style.left = `${rect.left}px`;
+    mirror.style.top = `${rect.top}px`;
+    mirror.style.overflow = 'hidden';
+    properties.forEach((property) => { mirror.style[property] = computed[property]; });
+
+    if (inputEl.tagName === 'INPUT') {
+      mirror.style.whiteSpace = 'pre';
+    } else {
+      mirror.style.whiteSpace = 'pre-wrap';
+      mirror.style.overflowWrap = 'break-word';
+    }
+
+    mirror.textContent = inputEl.value.slice(0, selectionEnd);
+    const marker = document.createElement('span');
+    // 空の span でも行の高さと位置を安定して取得する。
+    marker.textContent = '\u200b';
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+
+    const markerRect = marker.getBoundingClientRect();
+    mirror.remove();
+    const x = markerRect.left - inputEl.scrollLeft;
+    const y = markerRect.top - inputEl.scrollTop;
+    const lineHeight = Number.parseFloat(computed.lineHeight) || Number.parseFloat(computed.fontSize) * 1.4 || 20;
+
+    return {
+      left: Math.max(rect.left, Math.min(x, rect.right)),
+      right: Math.max(rect.left, Math.min(x + 1, rect.right)),
+      top: Math.max(rect.top, Math.min(y, rect.bottom)),
+      bottom: Math.max(rect.top, Math.min(y + lineHeight, rect.bottom)),
+      width: 1,
+      height: lineHeight,
+    };
+  };
+
+  let anchorRect = null;
+  if (targetInfo?.type === 'input') {
+    anchorRect = getInputSelectionRect(targetInfo.el, targetInfo.end);
+  } else if (targetInfo?.type === 'range') {
+    const rect = targetInfo.range.getBoundingClientRect();
+    if (rect && (rect.width || rect.height)) anchorRect = rect;
+  }
+
+  const applyResult = async ({ text, summary, error }) => {
     if (error) { toast(error, 'error'); return; }
     const label = (summary ?? text ?? '').replace(/\s+/g, ' ').slice(0, 60);
+
+    // Google ドキュメントは execCommand('insertText') が実際には編集していなくても
+    // true を返すため、成功判定には使えない。必ずコピーして実入力用 iframe へ
+    // フォーカスを戻し、続く貼り付けだけで選択範囲を置換できる状態にする。
+    if (targetInfo?.type === 'google-docs') {
+      try {
+        await navigator.clipboard.writeText(text);
+        const response = await chrome.runtime.sendMessage({ type: 'TOTONOE_FOCUS_GOOGLE_DOCS' });
+        toast(response?.focused
+          ? `コピーしました。⌘Vで置き換えられます: ${label}`
+          : `コピーしました: ${label}`);
+      } catch {
+        toast('変換結果をコピーできませんでした', 'error');
+      }
+      return;
+    }
 
     // 1) input / textarea
     if (targetInfo?.type === 'input') {
@@ -362,32 +526,28 @@ function showPaletteInPage({ items }) {
       position: fixed;
       inset: 0;
       z-index: 2147483647;
-      background: rgba(25, 26, 23, 0.3);
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
-      padding-top: 12vh;
+      background: transparent;
       animation: totonoe-fade-in .1s ease-out;
     }
     .palette {
-      width: 560px;
-      max-width: calc(100vw - 32px);
-      background: #fbfaf7;
-      color: #272824;
-      border: 1px solid #d1cec5;
-      border-radius: 7px;
-      box-shadow: 0 18px 48px rgba(31, 32, 29, .2);
+      position: fixed;
+      width: 344px;
+      max-width: calc(100vw - 24px);
+      background: #fff;
+      color: #171a1d;
+      border: 1px solid rgba(32, 42, 50, .12);
+      border-radius: 14px;
+      box-shadow: 0 12px 32px rgba(28, 38, 46, .18), 0 2px 8px rgba(28, 38, 46, .08);
       font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Noto Sans JP", sans-serif;
       overflow: hidden;
       user-select: none;
     }
     @media (prefers-color-scheme: dark) {
-      .backdrop { background: rgba(0, 0, 0, 0.5); }
       .palette {
-        background: #252724;
-        color: #eeece5;
-        border-color: #454840;
-        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+        background: #25282b;
+        color: #f3f5f4;
+        border-color: rgba(255, 255, 255, .12);
+        box-shadow: 0 16px 42px rgba(0, 0, 0, .55);
       }
     }
     @keyframes totonoe-fade-in {
@@ -397,151 +557,99 @@ function showPaletteInPage({ items }) {
     .header {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      padding: 11px 16px;
-      border-bottom: 1px solid #dedbd2;
-      background: #f4f2ed;
+      justify-content: flex-end;
+      padding: 8px 10px 2px;
     }
-    @media (prefers-color-scheme: dark) {
-      .header {
-        border-color: #3d403a;
-        background: #20221f;
-      }
+    .settings-button {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: #7c858b;
+      cursor: pointer;
     }
-    .title-wrap {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
+    .settings-button svg {
+      width: 18px;
+      height: 18px;
     }
-    .title {
-      font-weight: 700;
-      font-size: 14px;
-      color: #315344;
-      letter-spacing: .04em;
-    }
-    @media (prefers-color-scheme: dark) {
-      .title { color: #a4c5b3; }
-    }
-    .title-sub {
-      font-size: 12px;
-      color: #74766e;
-    }
-    @media (prefers-color-scheme: dark) {
-      .title-sub { color: #a19f97; }
-    }
-    .close-hint {
-      font-size: 11px;
-      padding: 2px 6px;
-      border-radius: 3px;
-      background: #e9e6df;
-      color: #666860;
-      border: 1px solid #d6d3ca;
-    }
-    @media (prefers-color-scheme: dark) {
-      .close-hint {
-        background: rgba(255, 255, 255, 0.08);
-        color: #aaa89f;
-        border-color: #454840;
-      }
+    .settings-button:hover, .settings-button:focus-visible {
+      background: rgba(26, 35, 42, .06);
+      color: inherit;
+      outline: none;
     }
     .list {
       list-style: none;
       margin: 0;
-      padding: 6px 8px;
+      padding: 0 10px 10px;
       max-height: min(52vh, 480px);
       overflow-y: auto;
-      display: grid;
-      gap: 4px;
     }
     .item {
       display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 8px 10px;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: background .1s;
-    }
-    .item:hover {
-      background: #e8eee9;
-    }
-    @media (prefers-color-scheme: dark) {
-      .item:hover {
-        background: rgba(111, 151, 130, .18);
-      }
-    }
-    .key-badge {
-      display: inline-flex;
       align-items: center;
-      justify-content: center;
-      width: 24px;
-      height: 24px;
-      border-radius: 3px;
-      font-weight: 650;
-      font-size: 13px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      background: #fbfaf7;
-      color: #3d6654;
-      border: 1px solid #b9c9bf;
-      flex-shrink: 0;
+      gap: 10px;
+      min-height: 48px;
+      padding: 11px 12px;
+      border-top: 1px solid #e3e7e9;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: background .12s ease;
+    }
+    .item:first-child { border-top-color: transparent; }
+    .item:hover, .item:focus-visible {
+      background: #e9f7f5;
+      outline: none;
     }
     @media (prefers-color-scheme: dark) {
-      .key-badge {
-        background: #2d302c;
-        color: #a4c5b3;
-        border-color: #61766a;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-      }
-    }
-    .item-content {
-      flex: 1;
-      min-width: 0;
-      display: grid;
-      gap: 3px;
+      .item { border-top-color: rgba(255, 255, 255, .08); }
+      .item:first-child { border-top-color: transparent; }
+      .item:hover, .item:focus-visible { background: rgba(55, 184, 170, .16); }
+      .settings-button:hover, .settings-button:focus-visible { background: rgba(255, 255, 255, .08); }
     }
     .preview {
+      flex: 1 1 auto;
+      min-width: 0;
       font-weight: 600;
-      font-size: 14px;
+      font-size: 15px;
       line-height: 1.45;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
-    .pattern {
-      font-size: 11px;
-      color: #6c6864;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      justify-self: end;
-    }
-    @media (prefers-color-scheme: dark) {
-      .pattern { color: #9a9691; }
-    }
-    .footer {
-      padding: 8px 16px;
-      font-size: 11px;
-      color: #6c6864;
-      border-top: 1px solid #e3dfd9;
-      background: #f4f2ed;
+    .shortcut-key {
       display: grid;
-      gap: 5px;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 22px;
+      height: 22px;
+      border: 1px solid #d7dddf;
+      border-radius: 6px;
+      color: #778087;
+      background: #f8f9f9;
+      font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     @media (prefers-color-scheme: dark) {
-      .footer {
-        border-color: #34373a;
-        background: #1a1c1e;
-        color: #9a9691;
+      .shortcut-key {
+        border-color: rgba(255, 255, 255, .16);
+        background: rgba(255, 255, 255, .05);
+        color: #aeb5b8;
       }
     }
-    .selected-preview {
-      max-height: 7em;
-      white-space: pre-wrap;
-      overflow: auto;
-      overflow-wrap: anywhere;
-      line-height: 1.45;
+    .select-mark {
+      flex: 0 0 auto;
+      color: #25aa9d;
+      font-size: 20px;
+      font-weight: 700;
+      opacity: 0;
+      transform: translateX(-3px);
+      transition: opacity .12s ease, transform .12s ease;
     }
-    .footer-meta {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
+    .item:hover .select-mark, .item:focus-visible .select-mark {
+      opacity: 1;
+      transform: translateX(0);
     }
   `;
 
@@ -554,12 +662,14 @@ function showPaletteInPage({ items }) {
   const header = document.createElement('div');
   header.className = 'header';
   header.innerHTML = `
-    <div class="title-wrap">
-      <span class="title">ととのえ</span>
-      <span class="title-sub">フォーマットを選ぶ</span>
-    </div>
-    <span class="close-hint">esc</span>
+    <button class="settings-button" type="button" aria-label="ととのえの設定を開く" title="設定">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.96 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3v-4h.08A1.7 1.7 0 0 0 4.6 8.96a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8.96 4.6 1.7 1.7 0 0 0 10 3.08V3h4v.08a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z"></path>
+      </svg>
+    </button>
   `;
+  const settingsButton = header.querySelector('.settings-button');
 
   const list = document.createElement('ul');
   list.className = 'list';
@@ -568,50 +678,68 @@ function showPaletteInPage({ items }) {
     const li = document.createElement('li');
     li.className = 'item';
     li.dataset.index = String(item.index);
-    const keyBadge = document.createElement('span');
-    keyBadge.className = 'key-badge';
-    keyBadge.textContent = item.key;
-    const itemContent = document.createElement('div');
-    itemContent.className = 'item-content';
+    li.tabIndex = 0;
+    li.title = `${item.key}キーで選択`;
+    const shortcutKey = document.createElement('span');
+    shortcutKey.className = 'shortcut-key';
+    shortcutKey.setAttribute('aria-hidden', 'true');
+    shortcutKey.textContent = item.key;
     const preview = document.createElement('span');
     preview.className = 'preview';
     preview.textContent = item.preview;
-    const pattern = document.createElement('span');
-    pattern.className = 'pattern';
-    pattern.textContent = item.pattern;
-    itemContent.append(preview, pattern);
-    li.append(keyBadge, itemContent);
+    const selectMark = document.createElement('span');
+    selectMark.className = 'select-mark';
+    selectMark.setAttribute('aria-hidden', 'true');
+    selectMark.textContent = '✓';
+    li.append(shortcutKey, preview, selectMark);
     li.addEventListener('click', (e) => {
       e.stopPropagation();
       choose(item.index);
     });
+    li.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        choose(item.index);
+      }
+    });
     list.appendChild(li);
   });
 
-  const footer = document.createElement('div');
-  footer.className = 'footer';
-  const selectedLabel = document.createElement('span');
-  selectedLabel.textContent = '変換前';
-  const selectedPreview = document.createElement('span');
-  selectedPreview.className = 'selected-preview';
-  selectedPreview.textContent = selectedText;
-  const footerMeta = document.createElement('div');
-  footerMeta.className = 'footer-meta';
-  const afterLabel = document.createElement('span');
-  afterLabel.textContent = '上の候補は変換後';
-  const keyHint = document.createElement('span');
-  keyHint.textContent = `1〜${items.length} キーで選択`;
-  footerMeta.append(afterLabel, keyHint);
-  footer.append(selectedLabel, selectedPreview, footerMeta);
-
   palette.appendChild(header);
   palette.appendChild(list);
-  palette.appendChild(footer);
   backdrop.appendChild(palette);
 
   shadow.appendChild(style);
   shadow.appendChild(backdrop);
   document.body.appendChild(host);
+
+  // 基本は選択範囲の下に表示し、画面下に収まらなければ上へ逃がす。
+  // Google Docs など座標を取得できない画面では中央表示に戻す。
+  const positionPalette = () => {
+    const margin = 12;
+    const gap = 8;
+    const paletteRect = palette.getBoundingClientRect();
+    let left;
+    let top;
+
+    if (anchorRect) {
+      left = anchorRect.left;
+      top = anchorRect.bottom + gap;
+      if (top + paletteRect.height > window.innerHeight - margin) {
+        top = anchorRect.top - paletteRect.height - gap;
+      }
+    } else {
+      left = (window.innerWidth - paletteRect.width) / 2;
+      top = Math.max(margin, window.innerHeight * 0.12);
+    }
+
+    left = Math.max(margin, Math.min(left, window.innerWidth - paletteRect.width - margin));
+    top = Math.max(margin, Math.min(top, window.innerHeight - paletteRect.height - margin));
+    palette.style.left = `${Math.round(left)}px`;
+    palette.style.top = `${Math.round(top)}px`;
+  };
+  positionPalette();
+  list.querySelector('.item')?.focus({ preventScroll: true });
 
   // 選択内容を実際に各書式へ変換し、複数行のまま候補に表示する。
   chrome.runtime.sendMessage(
@@ -623,6 +751,7 @@ function showPaletteInPage({ items }) {
         if (!preview) return;
         preview.textContent = count > 0 ? text : '日付として読めません';
       });
+      requestAnimationFrame(positionPalette);
     }
   );
 
@@ -631,6 +760,7 @@ function showPaletteInPage({ items }) {
     if (isClosed) return;
     isClosed = true;
     window.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('resize', positionPalette);
     host.remove();
   };
 
@@ -649,6 +779,12 @@ function showPaletteInPage({ items }) {
       }
     );
   };
+
+  settingsButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    chrome.runtime.sendMessage({ type: 'TOTONOE_OPEN_OPTIONS' });
+    cleanup();
+  });
 
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) {
@@ -687,4 +823,5 @@ function showPaletteInPage({ items }) {
   };
 
   window.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('resize', positionPalette);
 }
