@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ととのえ｜Totonoe の設定</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>ととのえ<span class="romaji">Totonoe</span></h1>
+    <p class="lead">日本語の表記をととのえる。いまは日付の整形ができます。</p>
+  </header>
+
+  <section>
+    <h2>出力フォーマット</h2>
+    <p class="note">右クリックメニューにこの順で並びます。書き換えると即座に保存されます。</p>
+    <ul id="formats" class="rows"></ul>
+    <button id="add-format" class="ghost" type="button">＋ 書式を追加</button>
+  </section>
+
+  <section>
+    <h2>動作を試す</h2>
+    <p class="note">ページで選択する文字列を入れて、結果を確かめられます。</p>
+    <input id="probe" type="text" value="6/5" autocomplete="off" spellcheck="false">
+    <ul id="probe-results" class="rows plain"></ul>
+  </section>
+
+  <section>
+    <h2>入力パターン（正規表現）</h2>
+    <p class="note">
+      上から順に試して、最初に一致したものを使います。名前付きグループ
+      <code>y</code> <code>M</code> <code>d</code> <code>H</code> <code>m</code>
+      <code>ampm</code> <code>rel</code> を拾います。
+    </p>
+    <ul id="rules" class="rows"></ul>
+    <div class="row-actions">
+      <button id="add-rule" class="ghost" type="button">＋ パターンを追加</button>
+      <button id="reset-rules" class="ghost" type="button">既定に戻す</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>書式トークン</h2>
+    <p class="note">ラテン文字だけがトークンです。「月」「日」「(」などはそのまま書けます。トークンとして解釈させたくないラテン文字は <code>[ ]</code> で囲みます。</p>
+    <table id="tokens"></table>
+  </section>
+
+  <footer>
+    <span id="status" role="status"></span>
+    <a href="https://github.com/" id="repo" target="_blank" rel="noreferrer">ソースコード</a>
+  </footer>
+</main>
+<script type="module" src="options.js"></script>
+</body>
+</html>

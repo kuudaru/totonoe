@@ -1,0 +1,50 @@
+name: Release
+
+# v0.1.0 のようなタグを push すると走る。
+on:
+  push:
+    tags: ['v*']
+
+# Release を作るために書き込み権限が要る。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # リリースノート自動生成に履歴が要る
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 単体テスト
+        run: npm test
+
+      - name: タグと manifest.json のバージョンが一致するか確認
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          MANIFEST=$(node -p "require('./manifest.json').version")
+          echo "タグ: $TAG / manifest: $MANIFEST"
+          if [ "$TAG" != "$MANIFEST" ]; then
+            echo "::error::タグ($TAG)と manifest.json($MANIFEST)のバージョンが違います"
+            exit 1
+          fi
+
+      - name: 配布用 zip を作る
+        run: zip -r -q "totonoe-${GITHUB_REF_NAME}.zip" manifest.json icons src -x '*.test.js'
+
+      - name: Release を作って zip を添付する
+        uses: softprops/action-gh-release@v2
+        with:
+          files: totonoe-${{ github.ref_name }}.zip
+          generate_release_notes: true
+          body: |
+            ## インストール
+
+            添付の zip を展開し、Chrome で `chrome://extensions` を開いて
+            デベロッパーモードをオンにし、「パッケージ化されていない拡張機能を読み込む」から
+            展開したフォルダを選んでください。
