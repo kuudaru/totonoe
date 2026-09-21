@@ -1,7 +1,7 @@
 {
   "name": "totonoe",
-  "version": "1.0.2",
-  "description": "ととのえ｜Totonoe — 日本語の表記をととのえる Chrome 拡張機能",
+  "version": "1.1.0",
+  "description": "ととのえ｜Totonoe — 日付のフォーマットをととのえる Chrome 拡張機能",
   "type": "module",
   "private": true,
   "license": "MIT",
