@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ととのえ",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "選択した日付を、いつもの書き方に揃えます。「6/5」→「6月5日(金)」。複数行にも対応。",
   "permissions": [
     "contextMenus",
