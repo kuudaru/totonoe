@@ -1,6 +1,6 @@
 {
   "name": "totonoe",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ととのえ｜Totonoe — 日本語の表記をととのえる Chrome 拡張機能",
   "type": "module",
   "private": true,
