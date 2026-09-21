@@ -3,53 +3,106 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ととのえ｜Totonoe の設定</title>
+<title>ととのえ — 設定</title>
 <link rel="stylesheet" href="options.css">
 </head>
 <body>
 <main>
   <header>
-    <h1>ととのえ<span class="romaji">Totonoe</span></h1>
-    <p class="lead">日本語の表記をととのえる。いまは日付の整形ができます。</p>
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3.5" y="5.5" width="17" height="15" rx="2"/>
+          <path d="M8 3.5v4M16 3.5v4M3.5 10h17M8 14h3M8 17h7"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>ととのえ</h1>
+        <p class="product-kind">日付表記ツール</p>
+      </div>
+    </div>
+    <p class="lead">日付の書き方を、いつもの形に揃えます。</p>
   </header>
 
-  <section>
-    <h2>出力フォーマット</h2>
-    <p class="note">右クリックメニューにこの順で並びます。書き換えると即座に保存されます。</p>
-    <ul id="formats" class="rows"></ul>
-    <button id="add-format" class="ghost" type="button">＋ 書式を追加</button>
-  </section>
-
-  <section>
-    <h2>動作を試す</h2>
-    <p class="note">ページで選択する文字列を入れて、結果を確かめられます。</p>
-    <input id="probe" type="text" value="6/5" autocomplete="off" spellcheck="false">
-    <ul id="probe-results" class="rows plain"></ul>
-  </section>
-
-  <section>
-    <h2>入力パターン（正規表現）</h2>
-    <p class="note">
-      上から順に試して、最初に一致したものを使います。名前付きグループ
-      <code>y</code> <code>M</code> <code>d</code> <code>H</code> <code>m</code>
-      <code>ampm</code> <code>rel</code> を拾います。
-    </p>
-    <ul id="rules" class="rows"></ul>
-    <div class="row-actions">
-      <button id="add-rule" class="ghost" type="button">＋ パターンを追加</button>
-      <button id="reset-rules" class="ghost" type="button">既定に戻す</button>
+  <section class="card-section">
+    <div class="section-head">
+      <h2>変換タイプ</h2>
+      <p class="note">右クリックメニューには、ここに並んでいる順で表示されます。</p>
+      <p class="shortcut-note">ショートカット <kbd>Option</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd></p>
     </div>
+
+    <div class="preset-label">よく使う形</div>
+    <div id="format-presets" class="chips"></div>
+
+    <ul id="formats" class="rows simple"></ul>
+
+    <details class="advanced">
+      <summary>書式を細かく編集</summary>
+      <p class="note">
+        記号を組み合わせて書式を作れます。「月」「日」「(」などはそのまま入力できます。
+        <code>M</code> は月、<code>m</code> は分です。
+      </p>
+      <ul id="formats-advanced" class="rows"></ul>
+      <button id="add-format" class="btn-secondary" type="button">書式を追加</button>
+      <div class="table-container">
+        <table id="tokens"></table>
+      </div>
+    </details>
   </section>
 
-  <section>
-    <h2>書式トークン</h2>
-    <p class="note">ラテン文字だけがトークンです。「月」「日」「(」などはそのまま書けます。トークンとして解釈させたくないラテン文字は <code>[ ]</code> で囲みます。</p>
-    <table id="tokens"></table>
+  <section class="card-section">
+    <div class="section-head">
+      <h2>読み取る日付</h2>
+      <p class="note">
+        普段使う日付の書き方をオンにしてください。年月日表記と月日表記では、曜日
+        <code>(日)</code>〜<code>(土)</code>、<code>（日）</code>〜<code>（土）</code>、
+        <code>(日曜)</code>〜<code>(土曜)</code>、<code>（日曜）</code>〜<code>（土曜）</code>、
+        <code>(日曜日)</code>〜<code>(土曜日)</code>、<code>（日曜日）</code>〜<code>（土曜日）</code>
+        を末尾に付けられます。さらに、時刻 <code>H:mm</code>、<code>H：mm</code>、
+        <code>H時</code>、<code>H時mm</code>、<code>H時mm分</code>、
+        空白に続く <code>Hmm</code>・<code>HHmm</code> を付けられます。
+        区切り付き時刻の前には <code>午前</code>・<code>午後</code>も付けられます
+        （時刻も半角・全角数字に対応）。
+      </p>
+    </div>
+
+    <ul id="rules-simple" class="rows simple"></ul>
+
+    <details class="advanced">
+      <summary>読み取りルールを細かく編集</summary>
+      <p class="note">
+        上から順に照合します。正規表現の名前付きグループ
+        <code>y</code> <code>M</code> <code>d</code> <code>H</code> <code>m</code> <code>ampm</code> <code>rel</code> を利用できます。
+      </p>
+      <ul id="rules" class="rows"></ul>
+      <div class="row-actions">
+        <button id="add-rule" class="btn-secondary" type="button">ルールを追加</button>
+        <button id="reset-rules" class="btn-secondary danger-hover" type="button">標準に戻す</button>
+      </div>
+    </details>
+  </section>
+
+  <section class="card-section">
+    <div class="section-head">
+      <h2>試してみる</h2>
+      <p class="note">日付を含む文章を入力すると、変換後の形を確認できます。</p>
+    </div>
+    <div class="probe-box">
+      <textarea id="probe" rows="4" spellcheck="false" placeholder="例：会期は 6/5〜6/12 です" aria-label="試しに変換する文章">6/5
+6/12
+会期は 6/5〜6/12 です</textarea>
+    </div>
+    <ul id="probe-results" class="rows"></ul>
   </section>
 
   <footer>
-    <span id="status" role="status"></span>
-    <a href="https://github.com/" id="repo" target="_blank" rel="noreferrer">ソースコード</a>
+    <div class="status-wrap">
+      <span id="status" role="status"></span>
+    </div>
+    <a href="https://github.com/kuudaru/totonoe" id="repo" target="_blank" rel="noreferrer">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+      ソースコード
+    </a>
   </footer>
 </main>
 <script type="module" src="options.js"></script>

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  convert, formatDate, parseDate, weekdayIndex, DEFAULT_INPUT_RULES,
+  convert, findDates, formatDate, formatIn, parseDate, weekdayIndex, DEFAULT_INPUT_RULES,
 } from './date.js';
 
 // 2026-09-21 は月曜日
@@ -28,8 +28,18 @@ test('曜日トークン', () => {
 });
 
 test('ユーザーが書きそうな書式をそのまま通す', () => {
-  assert.equal(convert('6/5', 'M月d日(ddd) H:mm', at), '6月5日(金) 0:00');
+  assert.equal(convert('6/5', 'M月d日(ddd) H:mm', at), '6月5日(金)');
   assert.equal(convert('6/5 14:30', 'M月d日(ddd) H:mm', at), '6月5日(金) 14:30');
+});
+
+test('時刻つき書式でも、元のテキストに時刻がある場合だけ時刻を表示する', () => {
+  assert.equal(formatIn('6/12', 'M月d日(ddd) H:mm', at).text, '6月12日(金)');
+  assert.equal(formatIn('6/12 22:01', 'M月d日(ddd) H:mm', at).text, '6月12日(金) 22:01');
+  assert.equal(
+    formatIn('6/12\n6/19 22:01', 'M月d日(ddd) H:mm', at).text,
+    '6月12日(金)\n6月19日(金) 22:01'
+  );
+  assert.equal(formatIn('6/12', 'HH:mm', at).text, '6/12');
 });
 
 test('時刻のバリエーション', () => {
@@ -37,6 +47,15 @@ test('時刻のバリエーション', () => {
   assert.equal(convert('6/5 14時30分', 'HH:mm', at), '14:30');
   assert.equal(convert('6/5 午後2:05', 'HH:mm', at), '14:05');
   assert.equal(convert('6/5 午前0:30', 'a h:mm', at), '午前 12:30');
+});
+
+test('区切りなしの詰めた時刻（2200 → 22:00）', () => {
+  assert.equal(convert('9/21 2200', 'HH:mm', at), '22:00');
+  assert.equal(convert('9/21 900', 'HH:mm', at), '09:00');
+  assert.equal(convert('9/21 130', 'HH:mm', at), '01:30');
+  assert.equal(parseDate('9/21 2500', at), null); // 24時超えは無効
+  // 直前に空白がなければ時刻として拾わない。数字が地続きなので日付としても読まない
+  assert.equal(parseDate('9/212200', at), null);
 });
 
 test('相対表現', () => {
@@ -86,4 +105,70 @@ test('カスタム正規表現ルールを足せる', () => {
     ...DEFAULT_INPUT_RULES,
   ];
   assert.equal(convert('20260921', 'yyyy/M/d(ddd)', { ...at, rules }), '2026/9/21(月)');
+});
+
+test('複数行の日付をすべて整える（改行は保たれる）', () => {
+  const { text, count } = formatIn('6/5\n6/12\n6/19', 'M月d日(ddd)', at);
+  assert.equal(text, '6月5日(金)\n6月12日(金)\n6月19日(金)');
+  assert.equal(count, 3);
+});
+
+test('1行に複数の日付があっても両方整える', () => {
+  const { text, count } = formatIn('会期は 6/5〜6/12 です', 'M月d日(ddd)', at);
+  assert.equal(text, '会期は 6月5日(金)〜6月12日(金) です');
+  assert.equal(count, 2);
+});
+
+test('日付以外の文字はそのまま残る', () => {
+  const { text } = formatIn('・6/5 キックオフ\n・明日 締切', 'M/d(ddd)', at);
+  assert.equal(text, '・6/5(金) キックオフ\n・9/22(火) 締切');
+});
+
+test('前後の空白や改行を食わない', () => {
+  assert.equal(formatIn('  6/5  ', 'M/d', at).text, '  6/5  ');
+  assert.equal(formatIn('6/5\n\n6/12', 'M/d', at).text, '6/5\n\n6/12');
+  assert.equal(formatIn('9/21 14時 集合', 'M/d HH:mm', at).text, '9/21 14:00 集合');
+});
+
+test('重なった候補は左と優先順で解決する', () => {
+  // 「2026/9/21」を「9/21」と読み違えない
+  const found = findDates('2026/9/21', at);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].value.y, 2026);
+  assert.equal(found[0].value.rule, 'ymd');
+});
+
+test('日付がなければ原文のまま、件数は0', () => {
+  const { text, count } = formatIn('とくに日付なし', 'M/d', at);
+  assert.equal(text, 'とくに日付なし');
+  assert.equal(count, 0);
+});
+
+test('ありえない日付は飛ばして、他の日付は拾う', () => {
+  const { text, count } = formatIn('13/45 と 6/5', 'M月d日', at);
+  assert.equal(count, 1);
+  assert.ok(text.includes('6月5日'));
+});
+
+test('書式が時刻を出さないとき、拾った時刻は原文のまま残す', () => {
+  // 「6/5 14:30」を「M月d日」で整えても 14:30 が消えない
+  assert.equal(formatIn('6/5 14:30', 'M月d日(ddd)', at).text, '6月5日(金) 14:30');
+  assert.equal(formatIn('6/5 14:30', 'M月d日 H:mm', at).text, '6月5日 14:30');
+  assert.equal(formatIn('明日 9:00 集合', 'M/d', at).text, '9/22 9:00 集合');
+});
+
+test('すでに付いている曜日は二重にしない', () => {
+  assert.equal(formatIn('9/21(月)', 'M月d日(ddd)', at).text, '9月21日(月)');
+  assert.equal(formatIn('9月21日（月曜日）', 'M月d日(ddd)', at).text, '9月21日(月)');
+});
+
+test('全角数字も読む', () => {
+  assert.equal(formatIn('６/５', 'M月d日', at).text, '6月5日');
+  assert.equal(formatIn('２０２６年９月２１日', 'yyyy-MM-dd', at).text, '2026-09-21');
+});
+
+test('日付でない数字を拾わない', () => {
+  for (const s of ['v1.2.3', '03-1234-5678', '1.5/2.0', '100/200', '16:9', '24/7', 'Chrome 138/139']) {
+    assert.equal(formatIn(s, 'M月d日', at).count, 0, s);
+  }
 });

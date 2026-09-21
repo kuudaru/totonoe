@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ととのえ｜Totonoe",
-  "version": "0.1.0",
-  "description": "選択した日付を、自分で決めた書式に右クリックひとつで整えます。「6/5」→「6月5日(金)」。",
+  "name": "ととのえ",
+  "version": "1.0.0",
+  "description": "選択した日付を、いつもの書き方に揃えます。「6/5」→「6月5日(金)」。複数行にも対応。",
   "permissions": [
     "contextMenus",
     "storage",
@@ -18,7 +18,28 @@
     "open_in_tab": true
   },
   "action": {
-    "default_title": "ととのえ｜Totonoe の書式を編集"
+    "default_title": "ととのえの設定"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ],
+  "commands": {
+    "totonoe-palette": {
+      "suggested_key": {
+        "default": "Alt+Shift+D",
+        "mac": "Alt+Shift+D"
+      },
+      "description": "ととのえショートカットメニューを表示"
+    }
   },
   "icons": {
     "16": "icons/icon16.png",

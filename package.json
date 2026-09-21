@@ -1,13 +1,14 @@
 {
   "name": "totonoe",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "ととのえ｜Totonoe — 日本語の表記をととのえる Chrome 拡張機能",
   "type": "module",
   "private": true,
   "license": "MIT",
   "scripts": {
     "test": "node --test \"src/**/*.test.js\"",
-    "build": "rm -f totonoe.zip && zip -r -q totonoe.zip manifest.json icons src -x '*.test.js' && echo 'totonoe.zip を作成しました'"
+    "build": "rm -f totonoe.zip && zip -r -q totonoe.zip manifest.json icons src -x '*.test.js' && echo 'totonoe.zip を作成しました'",
+    "bump": "node scripts/bump.mjs"
   },
   "engines": {
     "node": ">=20"
